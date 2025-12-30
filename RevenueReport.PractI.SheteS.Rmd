@@ -1,0 +1,225 @@
+---
+title: "Analyze Sales"
+subtitle: "CS5200 Practicum I"
+author: "Sukanya Sudhir Shete"
+date: "Fall 2025"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+```{r load-packages, echo=FALSE}
+# Install and load required packages
+if (!require("RMySQL")) install.packages("RMySQL")
+if (!require("DBI")) install.packages("DBI")
+if (!require("knitr")) install.packages("knitr")
+if (!require("kableExtra")) install.packages("kableExtra")
+
+library(RMySQL)
+library(DBI)
+library(knitr)
+library(kableExtra)
+```
+```{r connect-db, echo=FALSE}
+# Database Connection Configuration
+db_user <- "xxxxx"
+db_password <- "xxxxxxx"
+db_host <- "xxxxx"
+db_port <- 99999
+db_name <- "defaultdb"
+
+# Connect to MySQL database
+conn <- dbConnect(
+  MySQL(),
+  user = db_user,
+  password = db_password,
+  host = db_host,
+  port = db_port,
+  dbname = db_name
+)
+```
+
+## Analysis by Restaurant
+```{r analysis-by-restaurant, echo=FALSE}
+# SQL query to get restaurant analysis
+query_restaurant_analysis <- "
+SELECT 
+  r.rest_name AS Restaurant,
+  COUNT(DISTINCT v.visit_id) AS TotalVisits,
+  COUNT(DISTINCT v.cust_id) AS UniqueCustomers,
+  COUNT(DISTINCT CASE WHEN c.loyalty_member = TRUE THEN v.cust_id END) AS LoyaltyMembers,
+  ROUND(SUM((o.food_bill + o.alcohol_bill) * (1 - p.discount)), 2) AS TotalSpent
+FROM restaurant r
+LEFT JOIN visit v ON r.rest_id = v.rest_id
+LEFT JOIN customer c ON v.cust_id = c.cust_id
+LEFT JOIN `order` o ON v.visit_id = o.visit_id
+LEFT JOIN payment p ON o.order_id = p.order_id
+GROUP BY r.rest_id, r.rest_name
+ORDER BY r.rest_name
+"
+
+# Execute query
+restaurant_analysis <- dbGetQuery(conn, query_restaurant_analysis)
+
+# Create formatted table
+kable(restaurant_analysis, 
+      col.names = c("Restaurant", "Total Visits", "Unique Customers", 
+                    "Loyalty Members", "Total Spent ($)"),
+      caption = "Restaurant Performance Summary",
+      align = c("l", "r", "r", "r", "r"),
+      format.args = list(big.mark = ","),
+      booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"), 
+                full_width = FALSE,
+                font_size = 10,
+                position = "center") %>%
+  row_spec(0, bold = TRUE)
+```
+
+\newpage
+
+## Sales & Visit Analytics
+```{r sales-analytics, echo=FALSE}
+# Get the years dynamically (last 2 years from the data)
+years_query <- "
+SELECT DISTINCT YEAR(visit_date) AS year 
+FROM visit 
+WHERE visit_date IS NOT NULL
+ORDER BY year DESC
+LIMIT 2
+"
+years <- dbGetQuery(conn, years_query)$year
+
+# Build year filter dynamically
+if (length(years) == 2) {
+  year_filter <- sprintf("YEAR(v.visit_date) IN (%d, %d)", years[2], years[1])
+  year_label <- sprintf("%d-%d", years[2], years[1])
+} else if (length(years) == 1) {
+  year_filter <- sprintf("YEAR(v.visit_date) = %d", years[1])
+  year_label <- as.character(years[1])
+} else {
+  year_filter <- "1=1"  # No filter if no years found
+  year_label <- "All Years"
+}
+
+# SQL query for sales analytics
+query_sales_analytics <- sprintf("
+SELECT 
+  r.rest_name AS Restaurant,
+  ROUND(SUM((o.food_bill + o.alcohol_bill) * (1 - p.discount)), 2) AS TotalRevenue,
+  ROUND(AVG((o.food_bill + o.alcohol_bill) * (1 - p.discount)), 2) AS AvgPerParty,
+  ROUND(AVG(v.party_size), 2) AS AvgPartySize
+FROM restaurant r
+LEFT JOIN visit v ON r.rest_id = v.rest_id
+LEFT JOIN `order` o ON v.visit_id = o.visit_id
+LEFT JOIN payment p ON o.order_id = p.order_id
+WHERE %s
+GROUP BY r.rest_id, r.rest_name
+ORDER BY r.rest_name
+", year_filter)
+
+# Execute query
+sales_analytics <- dbGetQuery(conn, query_sales_analytics)
+
+# Create formatted table (restaurants as rows - vertical format)
+kable(sales_analytics,
+      col.names = c("Restaurant", "Total Revenue ($)", "Avg Per Party ($)", "Avg Party Size"),
+      caption = sprintf("Sales and Visit Analytics (%s)", year_label),
+      align = c("l", "r", "r", "r"),
+      format.args = list(big.mark = ","),
+      booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"), 
+                full_width = FALSE,
+                font_size = 10,
+                position = "center") %>%
+  row_spec(0, bold = TRUE)
+```
+
+\newpage
+
+## Revenue Trend by Year
+```{r revenue-trend, echo=FALSE, fig.width=12, fig.height=10}
+# First, check what states are available
+available_states <- dbGetQuery(conn, "SELECT DISTINCT state FROM restaurant ORDER BY state")
+
+if ("FL" %in% available_states$state) {
+  state_code <- "FL"
+  state_name <- "Florida"
+} else {
+  state_code <- NULL
+  state_name <- NULL
+}
+
+# SQL query for revenue by year for the selected state
+if (!is.null(state_code)) {
+  query_trend <- sprintf("
+  SELECT 
+    YEAR(v.visit_date) AS Year,
+    SUM((o.food_bill + o.alcohol_bill) * (1 - p.discount)) AS TotalRevenue
+  FROM visit v
+  JOIN restaurant r ON v.rest_id = r.rest_id
+  JOIN `order` o ON v.visit_id = o.visit_id
+  JOIN payment p ON o.order_id = p.order_id
+  WHERE r.state = '%s' AND v.visit_date IS NOT NULL
+  GROUP BY YEAR(v.visit_date)
+  ORDER BY Year
+  ", state_code)
+  
+  # Execute query
+  trend_data <- dbGetQuery(conn, query_trend)
+} else {
+  trend_data <- data.frame()
+}
+
+# Check if there's data
+if (nrow(trend_data) > 0 && !is.null(state_name)) {
+  # Create line chart
+  par(mar = c(5, 6.5, 4, 2))
+
+  
+  plot(trend_data$Year, trend_data$TotalRevenue,
+       type = "b",
+       pch = 19,
+       col = "steelblue",
+       lwd = 2,
+       xlab = "Year",
+       ylab = "",
+       main = sprintf("Total Revenue Trend for %s Restaurants", state_name),
+       cex.main = 1.3,
+       cex.lab = 1.1,
+       las = 1,
+       xaxt = "n")
+  
+  mtext("Total Revenue ($)", side = 2, line = 4.5, cex = 1.1)
+  
+  # Add x-axis with year labels
+  axis(1, at = trend_data$Year, labels = trend_data$Year)
+  
+  # Add grid
+  grid(col = "gray80", lty = "dotted")
+  
+  # Add data labels
+  text(trend_data$Year, trend_data$TotalRevenue,
+       labels = sprintf("$%s", format(round(trend_data$TotalRevenue, 0), 
+                                      big.mark = ",")),
+       pos = 3,
+       cex = 0.9,
+       col = "darkblue")
+  
+  # Add legend
+  legend("topleft",
+         legend = c("Food + Alcohol Revenue"),
+         col = "steelblue",
+         lwd = 2,
+         pch = 19,
+         bty = "n",
+         cex = 0.9)
+} else {
+  plot.new()
+  text(0.5, 0.5, "No revenue data available for Florida.", cex = 1.5)
+}
+```
+```{r disconnect, echo=FALSE, results='hide'}
+# Disconnect from database
+invisible(dbDisconnect(conn))
+```
