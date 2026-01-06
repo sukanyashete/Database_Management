@@ -1,0 +1,648 @@
+---
+title: "Analysis of Streaming Transactions"
+subtitle: "Based on Data Collected by SportsTV"
+author: "Sukanya Sudhir Shete"
+date: "Fall 2025"
+output:
+  html_document:
+    theme: paper
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, eval = T, warning = F, include = F, author = "Sukanya Sudhir Shete"}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+rm(list = ls())
+```
+
+```{r load_libraries, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+if (!require("RMySQL")) install.packages("RMySQL")
+if (!require("DBI")) install.packages("DBI")
+if (!require("kableExtra")) install.packages("kableExtra")
+
+library(RMySQL)
+library(DBI)
+library(kableExtra)
+```
+
+```{r connect_to_mysql, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+conn_mysql <- dbConnect(
+  MySQL(),
+  user = "xxxx",
+  password = "xxxx",
+  host = "xxxx",
+  port = 9999,
+  dbname = "xxxx"
+)
+```
+
+# Overview
+
+This analysis report covers streaming patterns across different sports, time periods and geographic regions for SportsTV Germany's digital platform.
+
+---
+
+# Growth of Streaming Transactions by Streaming Time and Number of Events by Sport Over All Years
+
+## Growth of streaming transactions by streaming time of sport over years
+
+### Query Results: Streaming Time by Sport and Year
+
+```{r query_streaming_time_by_sport_year, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+streaming_time_data <- dbGetQuery(conn_mysql, "
+  SELECT
+    ds.sport_name,
+    dd.year,
+    ROUND(SUM(fst.streaming_time_sec) / 3600.0, 2) as total_streaming_hours,
+    SUM(fst.streaming_event_count) as event_count
+  FROM fact_streaming_transactions fst
+  JOIN dim_sport ds ON fst.sport_pk = ds.sport_pk
+  JOIN dim_date dd ON fst.date_pk = dd.date_pk
+  WHERE fst.sport_pk > 0
+  GROUP BY ds.sport_name, dd.year
+  ORDER BY dd.year, total_streaming_hours DESC
+")
+
+kable(streaming_time_data, 
+      caption = "Streaming Time (Hours) by Sport and Year",
+      col.names = c("Sport", "Year", "Total Streaming Hours", "Event Count"),
+      format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Streaming time insights
+
+```{r streaming_time_summary, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+streaming_time_pivot <- aggregate(
+  streaming_time_data$total_streaming_hours,
+  by = list(Sport = streaming_time_data$sport_name, Year = streaming_time_data$year),
+  FUN = sum
+)
+colnames(streaming_time_pivot) <- c("Sport", "Year", "Hours")
+
+top_sports_time <- aggregate(
+  Hours ~ Sport,
+  data = streaming_time_pivot,
+  FUN = sum
+)
+top_sports_time <- top_sports_time[order(-top_sports_time$Hours), ]
+
+min_year <- min(streaming_time_data$year)
+max_year <- max(streaming_time_data$year)
+total_hours <- sum(streaming_time_data$total_streaming_hours)
+top_sport <- top_sports_time$Sport[1]
+top_sport_hours <- round(top_sports_time$Hours[1], 2)
+```
+
+Over the period from `r min_year` to `r max_year`, SportsTV Germany accumulated a total of **`r format(as.integer(total_hours), big.mark=",")`** hours of streaming content. The sport with the highest engagement is **`r top_sport`** with **`r format(as.integer(top_sport_hours), big.mark=",")`** total streaming hours. Growth patterns vary significantly across different sports, reflecting changing audience preferences and content availability throughout the years.
+
+### Streaming time visualization
+
+```{r chart_streaming_time_by_sport_year, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+chart_data_time <- streaming_time_data[, c("sport_name", "year", "total_streaming_hours")]
+
+par(mar = c(5, 6, 4, 2))
+
+plot(NULL, 
+     xlim = c(min(chart_data_time$year), max(chart_data_time$year)),
+     ylim = c(0, max(chart_data_time$total_streaming_hours) * 1.1),
+     xlab = "Year",
+     ylab = "Total Streaming Hours",
+     main = "Growth of Streaming Time by Sport Over Years",
+     type = "n",
+     las = 1,
+     cex.lab = 0.9,
+     cex.axis = 0.75)
+
+unique_sports <- unique(chart_data_time$sport_name)
+colors <- rainbow(length(unique_sports))
+
+for (i in seq_along(unique_sports)) {
+  sport <- unique_sports[i]
+  sport_data <- chart_data_time[chart_data_time$sport_name == sport, ]
+  sport_data <- sport_data[order(sport_data$year), ]
+  
+  lines(sport_data$year, sport_data$total_streaming_hours, 
+        col = colors[i], lwd = 2, type = "o", pch = 16)
+}
+
+legend("topleft", 
+       legend = unique_sports,
+       col = colors,
+       lwd = 2,
+       pch = 16,
+       cex = 0.8)
+
+grid(nx = NA, ny = NULL, col = "gray80")
+```
+
+---
+
+## Growth of streaming transactions by number of sport events over years
+
+### Query Results - event count by sport and year
+
+```{r query_event_count_by_sport_year, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+event_count_data <- dbGetQuery(conn_mysql, "
+  SELECT
+    ds.sport_name,
+    dd.year,
+    SUM(fst.streaming_event_count) as total_events,
+    ROUND(SUM(fst.streaming_time_sec) / 3600.0, 2) as total_streaming_hours
+  FROM fact_streaming_transactions fst
+  JOIN dim_sport ds ON fst.sport_pk = ds.sport_pk
+  JOIN dim_date dd ON fst.date_pk = dd.date_pk
+  WHERE fst.sport_pk > 0
+  GROUP BY ds.sport_name, dd.year
+  ORDER BY dd.year, total_events DESC
+")
+
+kable(event_count_data,
+      caption = "Number of Streaming Events by Sport and Year",
+      col.names = c("Sport", "Year", "Total Events", "Streaming Hours"),
+      format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Event count insights
+
+```{r event_count_summary, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+event_count_pivot <- aggregate(
+  event_count_data$total_events,
+  by = list(Sport = event_count_data$sport_name, Year = event_count_data$year),
+  FUN = sum
+)
+colnames(event_count_pivot) <- c("Sport", "Year", "Events")
+
+top_sports_events <- aggregate(
+  Events ~ Sport,
+  data = event_count_pivot,
+  FUN = sum
+)
+top_sports_events <- top_sports_events[order(-top_sports_events$Events), ]
+
+min_year_events <- min(event_count_data$year)
+max_year_events <- max(event_count_data$year)
+total_events <- sum(event_count_data$total_events)
+top_sport_events <- top_sports_events$Sport[1]
+top_sport_event_count <- top_sports_events$Events[1]
+```
+
+Between `r min_year_events` and `r max_year_events`, SportsTV Germany recorded **`r format(as.integer(total_events), big.mark=",")`** streaming events. The sport with the highest event volume is **`r top_sport_events`** with **`r format(as.integer(top_sport_event_count), big.mark=",")`** total events. This demonstrates not only audience engagement through streaming duration but also the frequency of content consumption across different sports categories.
+
+### Event Count Visualization
+
+```{r chart_event_count_by_sport_year, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+chart_data_events <- event_count_data[, c("sport_name", "year", "total_events")]
+
+par(mar = c(5, 6, 4, 2))
+
+plot(NULL,
+     xlim = c(min(chart_data_events$year), max(chart_data_events$year)),
+     ylim = c(0, max(chart_data_events$total_events) * 1.1),
+     xlab = "Year",
+     ylab = "Number of Streaming Events",
+     main = "Growth of Streaming Events by Sport Over Years",
+     type = "n",
+     las = 1,
+     cex.lab = 0.9,
+     cex.axis = 0.75)
+
+unique_sports_events <- unique(chart_data_events$sport_name)
+colors_events <- rainbow(length(unique_sports_events))
+
+for (i in seq_along(unique_sports_events)) {
+  sport <- unique_sports_events[i]
+  sport_data <- chart_data_events[chart_data_events$sport_name == sport, ]
+  sport_data <- sport_data[order(sport_data$year), ]
+  
+  lines(sport_data$year, sport_data$total_events,
+        col = colors_events[i], lwd = 2, type = "o", pch = 16)
+}
+
+legend("topleft",
+       legend = unique_sports_events,
+       col = colors_events,
+       lwd = 2,
+       pch = 16,
+       cex = 0.8)
+
+grid(nx = NA, ny = NULL, col = "gray80")
+```
+
+---
+
+# Number of Streaming Events per Week for the Most Recent Year
+
+### Query Results - Weekly Streaming Events
+
+```{r weekly_query, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+recent_year <- dbGetQuery(conn_mysql, "SELECT MAX(year) as max_year FROM dim_date")$max_year
+
+weekly_events_data <- dbGetQuery(conn_mysql, "
+  SELECT
+    dd.week_of_year as week_number,
+    SUM(fst.streaming_event_count) as total_events,
+    ROUND(SUM(fst.streaming_time_sec) / 3600.0, 2) as total_streaming_hours,
+    COUNT(DISTINCT dd.date_pk) as active_days
+  FROM fact_streaming_transactions fst
+  JOIN dim_date dd ON fst.date_pk = dd.date_pk
+  WHERE dd.year = (SELECT MAX(year) FROM dim_date)
+  GROUP BY dd.week_of_year
+  ORDER BY dd.week_of_year
+")
+
+kable(weekly_events_data,
+      caption = paste("Weekly Streaming Events for Year", recent_year),
+      col.names = c("Week Number", "Total Events", "Streaming Hours", "Active Days"),
+      format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Weekly activity insights
+
+```{r weekly_summary_stats, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+total_weeks <- nrow(weekly_events_data)
+total_weekly_events <- sum(weekly_events_data$total_events)
+total_weekly_hours <- sum(weekly_events_data$total_streaming_hours)
+peak_week <- weekly_events_data$week_number[which.max(weekly_events_data$total_events)]
+peak_week_events <- max(weekly_events_data$total_events)
+peak_week_hours <- weekly_events_data$total_streaming_hours[which.max(weekly_events_data$total_events)]
+avg_weekly_events <- round(total_weekly_events / total_weeks, 2)
+avg_weekly_hours <- round(total_weekly_hours / total_weeks, 2)
+```
+
+In `r recent_year`, SportsTV Germany's streaming platform recorded **`r format(as.integer(total_weekly_events), big.mark=",")`** events across **`r total_weeks`** weeks, accumulating **`r format(as.integer(total_weekly_hours), big.mark=",")`** hours of streaming content. Week **`r peak_week`** emerged as the peak period with **`r format(as.integer(peak_week_events), big.mark=",")`** events and **`r format(as.integer(peak_week_hours), big.mark=",")`** streaming hours. The average weekly engagement was **`r format(as.integer(avg_weekly_events), big.mark=",")`** events and **`r format(as.integer(avg_weekly_hours), big.mark=",")`** streaming hours per week.
+
+### Weekly activity visualization
+
+```{r chart_weekly_bars, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+chart_data_weekly <- weekly_events_data[, c("week_number", "total_events")]
+
+par(mar = c(5, 6, 4, 2))
+
+barplot(chart_data_weekly$total_events,
+        names.arg = chart_data_weekly$week_number,
+        main = paste("Weekly Streaming Events for Year", recent_year),
+        xlab = "Week Number",
+        ylab = "Number of Streaming Events",
+        col = "steelblue",
+        las = 1,
+        cex.lab = 0.9,
+        cex.axis = 0.75,
+        ylim = c(0, 20000))
+
+y_ticks <- axis(2, labels = FALSE, las = 1)
+y_ticks <- c(y_ticks, 20000)
+y_ticks <- sort(y_ticks)
+axis(2, at = y_ticks, labels = format(y_ticks, scientific = FALSE), las = 1, cex.axis = 0.75)
+
+grid(nx = NA, ny = NULL, col = "gray80")
+```
+
+---
+
+# Average Streaming Time and Total Number of Streams by Sport and Country
+
+## Streaming Metrics by Sport
+
+### Query Results
+
+```{r query_streaming_by_sport, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+streaming_by_sport <- dbGetQuery(conn_mysql, "
+  SELECT
+    ds.sport_name,
+    SUM(fst.streaming_event_count) as total_streams,
+    COUNT(*) as total_fact_records,
+    ROUND(SUM(fst.streaming_time_sec) / 3600.0, 2) as total_streaming_hours,
+    ROUND(SUM(fst.streaming_time_sec) / COUNT(*) / 3600.0, 4) as avg_streaming_hours_per_record,
+    ROUND(AVG(fst.streaming_event_count), 2) as avg_streams_per_record
+  FROM fact_streaming_transactions fst
+  JOIN dim_sport ds ON fst.sport_pk = ds.sport_pk
+  WHERE fst.sport_pk > 0
+  GROUP BY ds.sport_name
+  ORDER BY total_streams DESC
+")
+
+kable(streaming_by_sport,
+      caption = "Average Streaming Time and Total Number of Streams by Sport",
+      col.names = c("Sport", "Total Streams", "Fact Records", "Total Hours", "Avg Hours per Record", "Avg Streams per Record"),
+      format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Insights
+
+```{r sport_summary_stats, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+total_sports <- nrow(streaming_by_sport)
+total_sport_streams <- sum(streaming_by_sport$total_streams)
+total_sport_hours <- sum(streaming_by_sport$total_streaming_hours)
+top_sport_by_streams <- streaming_by_sport$sport_name[which.max(streaming_by_sport$total_streams)]
+top_sport_streams_count <- max(streaming_by_sport$total_streams)
+top_sport_hours_value <- streaming_by_sport$total_streaming_hours[which.max(streaming_by_sport$total_streams)]
+avg_hours_across_sports <- round(mean(streaming_by_sport$total_streaming_hours), 2)
+```
+
+Across **`r total_sports`** sports, SportsTV Germany recorded **`r format(as.integer(total_sport_streams), big.mark=",")`** total streams, accumulating **`r format(as.integer(total_sport_hours), big.mark=",")`** hours of streaming content. **`r top_sport_by_streams`** leads with **`r format(as.integer(top_sport_streams_count), big.mark=",")`** streams and **`r format(as.integer(top_sport_hours_value), big.mark=",")`** total streaming hours. The average streaming hours across all sports is **`r format(as.integer(avg_hours_across_sports), big.mark=",")`** hours.
+
+### Visualization
+
+```{r chart_streaming_by_sport, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+chart_sport_data <- streaming_by_sport[order(-streaming_by_sport$total_streams), ]
+
+par(mar = c(8, 6, 4, 2))
+
+barplot(chart_sport_data$total_streams,
+        names.arg = chart_sport_data$sport_name,
+        main = "Total Number of Streams by Sport",
+        xlab = "Sport",
+        ylab = "Total Streams",
+        col = "darkgreen",
+        las = 1,
+        cex.lab = 0.9,
+        cex.axis = 0.75,
+        cex.names = 0.85,
+        ylim = c(0, 450000),
+        yaxt = "n")
+
+y_ticks <- axis(2, labels = FALSE, las = 1)
+y_ticks <- c(y_ticks, 400000) 
+y_ticks <- sort(y_ticks)
+axis(2, at = y_ticks, labels = format(y_ticks, scientific = FALSE), las = 1, cex.axis = 0.75)
+
+grid(nx = NA, ny = NULL, col = "gray80")
+```
+
+---
+
+## Streaming Metrics by Country
+
+### Query Results
+
+```{r query_streaming_by_country, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+streaming_by_country <- dbGetQuery(conn_mysql, "
+  SELECT
+    dc.country_name,
+    SUM(fst.streaming_event_count) as total_streams,
+    COUNT(*) as total_fact_records,
+    ROUND(SUM(fst.streaming_time_sec) / 3600.0, 2) as total_streaming_hours,
+    ROUND(SUM(fst.streaming_time_sec) / COUNT(*) / 3600.0, 4) as avg_streaming_hours_per_record,
+    ROUND(AVG(fst.streaming_event_count), 2) as avg_streams_per_record
+  FROM fact_streaming_transactions fst
+  JOIN dim_country dc ON fst.country_pk = dc.country_pk
+  WHERE fst.country_pk > 0
+  GROUP BY dc.country_name
+  ORDER BY total_streams DESC
+")
+
+kable(streaming_by_country,
+      caption = "Average Streaming Time and Total Number of Streams by Country",
+      col.names = c("Country", "Total Streams", "Fact Records", "Total Hours", "Avg Hours per Record", "Avg Streams per Record"),
+      format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Insights
+
+```{r country_summary_stats, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+total_countries <- nrow(streaming_by_country)
+total_country_streams <- sum(streaming_by_country$total_streams)
+total_country_hours <- sum(streaming_by_country$total_streaming_hours)
+top_country_by_streams <- streaming_by_country$country_name[which.max(streaming_by_country$total_streams)]
+top_country_streams_count <- max(streaming_by_country$total_streams)
+top_country_hours_value <- streaming_by_country$total_streaming_hours[which.max(streaming_by_country$total_streams)]
+avg_hours_across_countries <- round(mean(streaming_by_country$total_streaming_hours), 2)
+```
+
+Across **`r total_countries`** countries, SportsTV Germany served **`r format(as.integer(total_country_streams), big.mark=",")`** total streams, accumulating **`r format(as.integer(total_country_hours), big.mark=",")`** hours of streaming content. **`r top_country_by_streams`** is the leading market with **`r format(as.integer(top_country_streams_count), big.mark=",")`** streams and **`r format(as.integer(top_country_hours_value), big.mark=",")`** total streaming hours. The average streaming hours across all countries is **`r format(as.integer(avg_hours_across_countries), big.mark=",")`** hours.
+
+### Visualization
+``` {r chart_streaming_by_country, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+chart_country_data <- streaming_by_country[order(-streaming_by_country$total_streams), ]
+par(mar = c(8, 6, 4, 2))
+barplot(chart_country_data$total_streams,
+        names.arg = chart_country_data$country_name,
+        main = "Total Number of Streams by Country",
+        xlab = "Country",
+        ylab = "Total Streams",
+        col = "steelblue",
+        las = 1,
+        cex.lab = 0.9,
+        cex.axis = 0.75,
+        cex.names = 0.85,
+        ylim = c(0, 1100000),
+        yaxt = "n")
+
+y_ticks <- axis(2, labels = FALSE, las = 1)
+y_ticks <- c(y_ticks, 1000000)
+y_ticks <- sort(y_ticks)
+axis(2, at = y_ticks, labels = format(y_ticks, scientific = FALSE), las = 1, cex.axis = 0.75)
+
+grid(nx = NA, ny = NULL, col = "gray80")
+```
+---
+
+# Day of the Week During Which the Most Content is Streamed by Sport and Country (Past 3 Years)
+
+## Peak Streaming Days by Sport (Past 3 Years)
+
+### Query Results
+
+```{r query_peak_days_by_sport, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+# Get the most recent year to calculate 3-year window
+max_year_data <- dbGetQuery(conn_mysql, "SELECT MAX(year) as max_year FROM dim_date")$max_year
+three_year_start <- max_year_data - 2
+
+# Extract peak streaming days by sport for past 3 years
+peak_days_by_sport <- dbGetQuery(conn_mysql, "
+  SELECT
+    ds.sport_name,
+    dd.day_of_week,
+    SUM(fst.streaming_event_count) as total_events,
+    ROUND(SUM(fst.streaming_time_sec) / 3600.0, 2) as total_streaming_hours,
+    COUNT(DISTINCT dd.date_pk) as number_of_days
+  FROM fact_streaming_transactions fst
+  JOIN dim_sport ds ON fst.sport_pk = ds.sport_pk
+  JOIN dim_date dd ON fst.date_pk = dd.date_pk
+  WHERE dd.year >= (SELECT MAX(year) - 2 FROM dim_date)
+    AND fst.sport_pk > 0
+  GROUP BY ds.sport_name, dd.day_of_week
+  ORDER BY ds.sport_name, total_streaming_hours DESC
+")
+
+# Show sports with their peak day
+peak_sport_table <- aggregate(
+  total_streaming_hours ~ sport_name + day_of_week,
+  data = peak_days_by_sport,
+  FUN = sum
+)
+peak_sport_table <- peak_sport_table[order(-peak_sport_table$total_streaming_hours), ]
+peak_sport_table <- peak_sport_table[!duplicated(peak_sport_table$sport_name), ]
+peak_sport_table_top10 <- head(peak_sport_table, 10)
+
+kable(peak_sport_table_top10,
+      caption = paste("Peak Streaming Days by Sport (Past 3 Years: 2023 - 2025 )"),
+      col.names = c("Sport", "Peak Day", "Streaming Hours"),
+      format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Insights
+
+```{r sport_peak_days_summary, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+# Get peak day overall across all sports
+peak_day_overall <- peak_days_by_sport$day_of_week[which.max(peak_days_by_sport$total_streaming_hours)]
+peak_day_hours_overall <- max(peak_days_by_sport$total_streaming_hours)
+
+# Get per-sport peak days
+sport_peak_days <- aggregate(
+  total_streaming_hours ~ sport_name,
+  data = peak_days_by_sport,
+  FUN = function(x) names(x)[which.max(x)]
+)
+
+peak_sports_count <- nrow(peak_days_by_sport[!duplicated(peak_days_by_sport$sport_name), ])
+```
+
+Over the past three years (`r three_year_start` to `r max_year_data`), streaming patterns reveal distinct day-of-week preferences across different sports. **`r peak_day_overall`** emerges as the peak streaming day across all sports, with **`r format(as.integer(peak_day_hours_overall), big.mark=",")`** total streaming hours. Analysis across **`r peak_sports_count`** sports shows varying preferences, with some sports showing stronger engagement on specific weekdays compared to others.
+
+### Visualization
+
+```{r chart_peak_days_by_sport, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+# Prepare data for visualization - get peak day per sport
+peak_sport_chart <- aggregate(
+  total_streaming_hours ~ sport_name + day_of_week,
+  data = peak_days_by_sport,
+  FUN = sum
+)
+
+# Get only the peak day for each sport
+peak_sport_chart <- peak_sport_chart[order(-peak_sport_chart$total_streaming_hours), ]
+peak_sport_chart <- peak_sport_chart[!duplicated(peak_sport_chart$sport_name), ]
+peak_sport_chart <- peak_sport_chart[order(-peak_sport_chart$total_streaming_hours), ]
+
+par(mar = c(8, 8, 4, 2))
+
+barplot(peak_sport_chart$total_streaming_hours,
+        names.arg = paste(peak_sport_chart$sport_name, "\n(", peak_sport_chart$day_of_week, ")"),
+        main = "Peak Streaming Day by Sport (Past 3 Years)",
+        xlab = "Sport (Peak Day)",
+        ylab = "Streaming Hours",
+        col = "coral",
+        las = 1,
+        cex.lab = 0.9,
+        cex.axis = 0.75,
+        cex.names = 0.75,
+        ylim = c(0, 80000),
+        yaxt = "n")
+
+y_ticks <- seq(0, 80000, by = 10000)
+axis(2, at = y_ticks, labels = format(y_ticks, scientific = FALSE), las = 1, cex.axis = 0.75)
+
+grid(nx = NA, ny = NULL, col = "gray80")
+```
+
+---
+
+## Peak Streaming Days by Country (Past 3 Years)
+### Query Results 
+
+```{r query_peak_days_by_country, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+# Extract peak streaming days by country for past 3 years
+peak_days_by_country <- dbGetQuery(conn_mysql, "
+  SELECT
+    dc.country_name,
+    dd.day_of_week,
+    SUM(fst.streaming_event_count) as total_events,
+    ROUND(SUM(fst.streaming_time_sec) / 3600.0, 2) as total_streaming_hours,
+    COUNT(DISTINCT dd.date_pk) as number_of_days
+  FROM fact_streaming_transactions fst
+  JOIN dim_country dc ON fst.country_pk = dc.country_pk
+  JOIN dim_date dd ON fst.date_pk = dd.date_pk
+  WHERE dd.year >= (SELECT MAX(year) - 2 FROM dim_date)
+    AND fst.country_pk > 0
+  GROUP BY dc.country_name, dd.day_of_week
+  ORDER BY dc.country_name, total_streaming_hours DESC
+")
+
+# Show countries with their peak day
+peak_country_table <- aggregate(
+  total_streaming_hours ~ country_name + day_of_week,
+  data = peak_days_by_country,
+  FUN = sum
+)
+peak_country_table <- peak_country_table[order(-peak_country_table$total_streaming_hours), ]
+peak_country_table <- peak_country_table[!duplicated(peak_country_table$country_name), ]
+peak_country_table_top10 <- head(peak_country_table, 10)
+
+kable(peak_country_table_top10,
+      caption = paste("Peak Streaming Days by Country (Past 3 Years: 2023 - 2025" ),
+      col.names = c("Country", "Peak Day", "Streaming Hours"),
+      format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+### Insights
+
+```{r country_peak_days_summary, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+# Get peak day overall across all countries
+peak_day_country_overall <- peak_days_by_country$day_of_week[which.max(peak_days_by_country$total_streaming_hours)]
+peak_day_country_hours_overall <- max(peak_days_by_country$total_streaming_hours)
+
+# Get per-country peak days
+country_peak_days <- aggregate(
+  total_streaming_hours ~ country_name,
+  data = peak_days_by_country,
+  FUN = function(x) names(x)[which.max(x)]
+)
+
+peak_countries_count <- nrow(peak_days_by_country[!duplicated(peak_days_by_country$country_name), ])
+```
+
+Across geographic markets during the past three years (`r three_year_start` to `r max_year_data`), **`r peak_day_country_overall`** shows the strongest streaming engagement, with **`r format(as.integer(peak_day_country_hours_overall), big.mark=",")`** total streaming hours. Content consumption patterns vary significantly by country, with **`r peak_countries_count`** markets showing distinct preferences for specific days of the week, providing valuable insights for regional content scheduling and marketing initiatives.
+
+### Visualization
+
+```{r chart_peak_days_by_country, eval = T, warning = F, author = "Sukanya Sudhir Shete"}
+# Prepare data for visualization - get peak day per country
+peak_country_chart <- aggregate(
+  total_streaming_hours ~ country_name + day_of_week,
+  data = peak_days_by_country,
+  FUN = sum
+)
+
+# Get only the peak day for each country
+peak_country_chart <- peak_country_chart[order(-peak_country_chart$total_streaming_hours), ]
+peak_country_chart <- peak_country_chart[!duplicated(peak_country_chart$country_name), ]
+peak_country_chart <- peak_country_chart[order(-peak_country_chart$total_streaming_hours), ]
+
+par(mar = c(8, 8, 4, 2))
+
+barplot(peak_country_chart$total_streaming_hours,
+        names.arg = paste(peak_country_chart$country_name, "\n(", peak_country_chart$day_of_week, ")"),
+        main = "Peak Streaming Day by Country (Past 3 Years)",
+        xlab = "Country (Peak Day)",
+        ylab = "Streaming Hours",
+        col = "mediumpurple",
+        las = 1,
+        cex.lab = 0.9,
+        cex.axis = 0.75,
+        cex.names = 0.75,
+        yaxt = "n")
+
+y_max <- max(peak_country_chart$total_streaming_hours)
+y_ticks <- seq(0, y_max * 1.1, by = 10000)
+axis(2, at = y_ticks, labels = format(y_ticks, scientific = FALSE), las = 1, cex.axis = 0.75)
+
+grid(nx = NA, ny = NULL, col = "gray80")
+```
+
+---
+
+```{r disconnect_database, eval = T, warning = F, message = F, results = 'hide', author = "Sukanya Sudhir Shete"}
+dbDisconnect(conn_mysql)
+```
